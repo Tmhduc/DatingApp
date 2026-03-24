@@ -1,0 +1,58 @@
+using System;
+using System.Security.Cryptography;
+using System.Text;
+using API.Data;
+using API.DTOs;
+using API.Entities;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+
+namespace API.Controllers;
+
+public class AccountController(AppDbContext context) : BaseApiController
+{
+    [HttpPost("register")] //api/account/register
+    public async Task<ActionResult<AppUser>> Register(RegisterDto registerDto) //match with query strings in the url
+    {
+        if (await EmailExists(registerDto.Email)) return BadRequest("Email taken"); //await unwrap task wrapper
+
+        using var hmac = new HMACSHA512();
+
+        var user = new AppUser
+        {
+            DisplayName = registerDto.DisplayName,
+            Email = registerDto.Email,
+            PasswordHash = hmac.ComputeHash(Encoding.UTF8.GetBytes(registerDto.Password)),
+            PasswordSalt = hmac.Key
+        };
+
+        context.Users.Add(user);
+        await context.SaveChangesAsync();
+
+        return user;
+    }
+
+    [HttpPost("login")]
+    public async Task<ActionResult<AppUser>> Login(LoginDto loginDto)
+    {
+        var user = await context.Users.FirstOrDefaultAsync(x => x.Email == loginDto.Email);
+
+        if (user == null) return Unauthorized("Invalid email address");
+
+        using var hmac = new HMACSHA512(user.PasswordSalt);
+
+        var computeHash = hmac.ComputeHash(Encoding.UTF8.GetBytes(loginDto.Password));
+
+        for (var i = 0; i < computeHash.Length; i++)
+        {
+            if (computeHash[i] != user.PasswordHash[i]) return Unauthorized("Invalid password");
+        }
+
+        return user;
+    }
+
+    private async Task<bool> EmailExists(string email)
+    {
+        return await context.Users.AnyAsync(x => x.Email.ToLower() == email.ToLower());
+    }
+}
